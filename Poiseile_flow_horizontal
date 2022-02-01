@@ -1,0 +1,178 @@
+import matplotlib.pyplot as plt
+import numpy as np
+import math as mt
+from tqdm import trange
+
+
+worktime=3000
+Re=10
+dt=1
+tau=1
+viscosity=1/3*(tau-1/2)
+u_max=0.1
+u_av=2/3*u_max
+L=round((Re*viscosity)/u_av)
+print("L= ", L)
+Nx,Ny=L+1,L+2
+G=np.array([12*u_av*viscosity/L**2,0])
+T_ch=u_av/(+G[0]+u_av/L**2*viscosity+u_av**2/L)
+w=np.array([4/9, 1/9,1/9,1/9,1/9, 1/36,1/36,1/36,1/36,])
+c=np.array([[0,0], [1,0],[0,1],[-1,0],[0,-1], [1,1],[-1,1],[-1,-1],[1,-1]])
+cs=1/mt.sqrt(3)
+bound=np.zeros((Nx,Ny))
+bound[:,[0,Ny-1]]=1
+
+
+
+def init_rho_u_fcur_feq():
+    rho1=np.zeros((Nx,Ny))
+    u1=np.zeros((Nx,Ny,2))
+    fcur=np.zeros((Nx,Ny,9))
+    feq=np.zeros((Nx,Ny,9))
+    for x in range (Nx):
+        for y in range (Ny):
+            if (bound[x,y]==0):
+                rho1[x,y]=1
+                u1[x,y,:]=3/2*u_av - G[0]/2/viscosity*(x-(Ny-3)/2)**2
+    fcur=f_eq(fcur,u1,rho1)
+    return rho1,u1,fcur,feq
+
+
+
+def f_eq (f,u1,rho1):
+    buf=np.copy(f)
+    for x in range (Nx):
+        for y in range (Ny):
+            if (bound[x,y]==0) :
+                for i in range (9):
+                    buf[x,y,i]=w[i]*rho1[x,y]*(1+np.dot(u1[x,y],c[i])/(cs**2)+
+                                     (np.dot(u1[x,y],c[i])**2)/(2*cs**4)-
+                                     np.dot(u1[x,y],u1[x,y])/(2*cs**2))
+    return buf
+
+
+
+def new_val(f):
+    rho1=np.zeros((Nx,Ny))
+    u1=np.zeros((Nx,Ny,2))
+    u_real=np.zeros((Nx,Ny,2))
+    for x in range (Nx):
+        for y in range (Ny):
+            if (bound[x,y]==0):
+                rho1[x,y]=np.sum(f[x,y,:])  
+                u1[x,y,0]=np.dot(c[:,0],f[x,y,:])/rho1[x,y]
+                u1[x,y,1]=np.dot(c[:,1],f[x,y,:])/rho1[x,y]
+                u_real[x,y,0]=np.dot(c[:,0],f[x,y,:])/rho1[x,y]+(G[0]*dt)/2 
+                u_real[x,y,1]=np.dot(c[:,1],f[x,y,:])/rho1[x,y]+(G[1]*dt)/2
+    return rho1,u1,u_real
+
+
+def bounce_back (f):
+    return np.array([f[0],f[3],f[4],f[1],f[2],f[7],f[8],f[5],f[6]])
+
+
+def collision(f,feq):
+    buf=np.copy(f)
+    for x in range (Nx):
+        for y in range (Ny):
+            if (bound[x,y]==1):
+                buf[x,y]=bounce_back(buf[x,y])
+            else:
+                buf[x,y]=buf[x,y]*(1-(dt/tau))+feq[x,y]*(dt/tau)
+    return buf
+
+def periodic (f):
+    buf=np.copy(f)
+    buf[0,:,:]=f[Nx-2,:,:]
+    buf[Nx-1,:,:]=f[1,:,:]
+    return buf
+
+
+def streaming (f):
+     f=periodic(f)
+     buf=np.copy(f)
+     for x in range(Nx):
+         for y in range (Ny):
+             
+             x_right=x+1
+             x_left=x-1
+             y_up=y+1
+             y_down=y-1
+             
+             if (x_right>Nx-1): x_right=Nx-1
+             if (x_left<0): x_left=0
+             if (y_up>Ny-1): y_up=Ny-1
+             if (y_down<0): y_down=0
+             
+             buf[x,y,0]=f[x,y,0]
+             buf[x,y,1]=f[x_left,y,1]
+             buf[x,y,3]=f[x_right,y,3]
+             buf[x,y,2]=f[x,y_down,2]
+             buf[x,y,4]=f[x,y_up,4]
+             buf[x,y,5]=f[x_left,y_down,5]
+             buf[x,y,7]=f[x_right,y_up,7]
+             buf[x,y,6]=f[x_right,y_down,6]
+             buf[x,y,8]=f[x_left,y_up,8]
+     return buf
+    
+    
+def s_force (feq,u,rho):
+    feqstar=np.copy(feq)
+    ustar=np.copy(u)
+    delta_s_force=np.zeros((Nx,Ny,9))
+    for x in range(Nx):
+        for y in range(Ny):
+            if (bound[x,y]==0):
+                ustar[x,y,0]=ustar[x,y,0]+(G[0]*dt)
+                ustar[x,y,1]=ustar[x,y,1]+(G[1]*dt)
+    feqstar=f_eq(feqstar,ustar,rho)
+    for x in range(Nx):
+        for y in range(Ny):
+            if (bound[x,y]==0):
+                delta_s_force[x,y]=(feqstar[x,y]-feq[x,y])*dt   
+    return delta_s_force
+
+def func_analit(x):
+    return 3/2*u_av - G[0]/2/viscosity*(x-(Ny-3)/2)**2
+
+
+
+
+if __name__== "__main__":  
+    rho,u,fcur,feq=init_rho_u_fcur_feq()
+    for i in trange(worktime):
+        fcur=streaming(fcur)
+        rho,u,u_real=new_val(fcur)
+        feq=f_eq(feq,u,rho)
+        fcur=collision(fcur,feq)
+        fcur=fcur+s_force(feq,u,rho)
+        
+ 
+print("L= ", L)
+
+
+
+coord = (np.linspace(0, (Ny-3), 1000))
+u_analit= func_analit(coord)/u_max
+plt.plot(coord/(Ny-2), u_analit, label = "ан. решение")
+plt.scatter(np.array((range(Ny-2)))/(Ny-2), (np.sqrt(np.sum((u_real[Nx//2,1:-1]**2),axis=1)))/u_max, marker = '+',
+            color='red', 
+            label='числ. решение')#беру
+# шестой середина по горизонтали вдоль трубы
+
+#plt.scatter([i for i in range(11)],v,color = 'red',label='аналит. решение')
+plt.xlabel('Y/L')
+plt.ylabel(' u(Y)/u_max ')
+plt.legend()
+plt.savefig('PUAS.png',dpi=600)
+plt.show() 
+
+num_sol = np.sqrt(np.sum((u_real[Nx//2,1:-1]**2),axis=1))
+an_sol = func_analit(np.array(range(Ny-2)))
+error = np.sum(np.abs(num_sol - an_sol))/L
+#plt.plot(num_sol)
+#plt.plot(an_sol)
+
+# plt.plot(error)
+# plt.show()
+print("error = ", error)
